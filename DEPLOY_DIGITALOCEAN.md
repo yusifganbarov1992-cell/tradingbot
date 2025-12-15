@@ -82,15 +82,11 @@ pip install -r requirements.txt
 nano .env
 ```
 
-**Вставь в .env:**
-```env
-BINANCE_API_KEY=your_binance_api_key
-BINANCE_SECRET_KEY=your_binance_secret_key
-TELEGRAM_BOT_TOKEN=your_telegram_token
-OPENAI_API_KEY=your_openai_key
-DEEPSEEK_API_KEY=your_deepseek_key
-OPERATOR_CHAT_ID=your_chat_id
-PAPER_TRADING=false
+**Скопируй содержимое локального файла .env в файл .env на сервере:**
+```bash
+nano .env
+# Вставь все свои реальные API ключи
+# Ctrl+X, затем Y, затем Enter для сохранения
 ```
 
 Сохрани: `Ctrl+X` → `Y` → `Enter`
