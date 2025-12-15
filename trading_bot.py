@@ -13,6 +13,7 @@ import pandas as pd
 import time
 from datetime import datetime, timedelta
 from database import TradingDatabase
+from database_supabase import SupabaseDatabase
 
 # Try to import TensorFlow, but make it optional
 try:
@@ -554,6 +555,14 @@ class TradingAgent:
         self.risk_engine = RiskEngine(max_position_size_pct=10, max_total_exposure_pct=30)
         self.metrics = MetricsTracker()
         self.db = TradingDatabase()  # Initialize database
+        
+        # 🌐 Supabase - облачное хранилище (опционально)
+        try:
+            self.supabase_db = SupabaseDatabase()
+            logger.info("☁️ Supabase подключена (двойное хранение активно)")
+        except Exception as e:
+            self.supabase_db = None
+            logger.warning(f"⚠️ Supabase не подключена: {e}. Используется только SQLite")
         
         # 🛡️ SAFETY MANAGER - 8-level protection
         initial_balance = 1000.0  # Will update from real balance
@@ -1209,7 +1218,15 @@ class TradingAgent:
                 'fee': fee
             }
             
+            # Сохранение в SQLite (основное)
             self.db.save_signal(trade_id, symbol, signal, current_price, indicators, ai_analysis, position_info)
+            
+            # Сохранение в Supabase (облачный бэкап)
+            if self.supabase_db:
+                try:
+                    self.supabase_db.save_signal(trade_id, symbol, signal, current_price, indicators, ai_analysis, position_info)
+                except Exception as e:
+                    logger.warning(f"⚠️ Supabase save_signal failed: {e}")
             
             # Send message to Telegram (use existing event loop if available)
             operator_chat_id = self.operator_chat_id
@@ -1336,6 +1353,7 @@ class TradingAgent:
             stop_loss = price - (2 * atr) if side == 'BUY' else price + (2 * atr)
             take_profit = price + (3 * atr) if side == 'BUY' else price - (3 * atr)
             
+            # Сохранение в SQLite (основное)
             self.db.save_trade(
                 trade_id=trade_id,
                 symbol=symbol,
@@ -1348,6 +1366,24 @@ class TradingAgent:
                 stop_loss=stop_loss,
                 take_profit=take_profit
             )
+            
+            # Сохранение в Supabase (облачный бэкап)
+            if self.supabase_db:
+                try:
+                    self.supabase_db.save_trade(
+                        trade_id=trade_id,
+                        symbol=symbol,
+                        side=side,
+                        entry_price=price,
+                        amount=amount,
+                        usdt_amount=usdt_amount,
+                        fee=fee,
+                        mode='paper' if self.paper_trading else 'real',
+                        stop_loss=stop_loss,
+                        take_profit=take_profit
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ Supabase save_trade failed: {e}")
             
             # Add to active positions
             self.active_positions[symbol] = {
@@ -1415,8 +1451,15 @@ class TradingAgent:
                 break
         
         if trade_id:
-            # Update trade in database
+            # Обновление в SQLite (основное)
             self.db.close_trade(trade_id, exit_price, pnl, pnl_pct)
+            
+            # Обновление в Supabase (облачный бэкап)
+            if self.supabase_db:
+                try:
+                    self.supabase_db.update_trade(trade_id, exit_price, pnl, pnl_pct, exit_fee)
+                except Exception as e:
+                    logger.warning(f"⚠️ Supabase update_trade failed: {e}")
         
         # 🛡️ Record P&L in Safety Manager
         self.safety.record_trade(pnl)

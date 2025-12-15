@@ -8,3 +8,4 @@ scikit-learn
 fastapi
 uvicorn[standard]
 openai
+supabase>=2.26.0
