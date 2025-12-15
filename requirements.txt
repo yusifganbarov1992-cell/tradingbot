@@ -1,0 +1,10 @@
+python-telegram-bot==20.8
+ccxt==4.2.19
+numpy
+pandas
+python-dotenv
+tensorflow-cpu; platform_machine != "aarch64"
+scikit-learn
+fastapi
+uvicorn[standard]
+openai

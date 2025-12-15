@@ -1,0 +1,5 @@
+{
+  "name": "NexusTrader AI",
+  "description": "Advanced AI Trading Agent interface featuring LSTM prediction visualization, technical indicator dashboards, and human-in-the-loop trade confirmation.",
+  "requestFramePermissions": []
+}

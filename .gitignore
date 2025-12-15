@@ -1,0 +1,55 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables (КРИТИЧНО!)
+.env
+.env.local
+.env.*.local
+*.env
+
+# Database (История сделок - приватная информация!)
+trading_history.db
+*.db
+*.sqlite
+*.sqlite3
+
+# AI Models
+*.keras
+*.h5
+*.pkl
+*.joblib
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
