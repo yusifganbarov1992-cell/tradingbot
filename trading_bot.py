@@ -73,6 +73,15 @@ ai_analysis_cache = {}
 AI_CACHE_DURATION = 300  # 5 minutes cache per symbol (was 3 min)
 MAX_CACHE_SIZE = 50  # Maximum symbols in cache
 
+def clean_ai_cache():
+    """LRU cleanup: remove oldest entries if cache too large"""
+    global ai_analysis_cache
+    if len(ai_analysis_cache) > MAX_CACHE_SIZE:
+        # Sort by timestamp, keep newest 30
+        sorted_items = sorted(ai_analysis_cache.items(), key=lambda x: x[1]['timestamp'], reverse=True)
+        ai_analysis_cache = dict(sorted_items[:30])
+        logger.info(f"🧹 AI cache cleaned: {len(sorted_items)} → 30 entries")
+
 # Token usage tracker
 total_tokens_used = 0
 total_ai_calls = 0
@@ -336,14 +345,22 @@ class SafetyManager:
     Защищает от убытков и неправильных решений AI
     """
     
-    def __init__(self, initial_balance):
+    def __init__(self, initial_balance, db=None):
         self.initial_balance = initial_balance
         self.daily_loss_limit_pct = 3.0  # Max -3% потерь за день
         self.max_trades_per_day = 5
         self.max_position_size_pct = 15.0
         self.min_confidence = 7  # AI confidence ≥7/10
         self.max_price_change_5min = 2.0  # Max 2% изменение цены за 5 мин
-        self.emergency_stop = False
+        
+        # Загрузка emergency_stop из БД (персистентность)
+        self.db = db
+        if self.db:
+            self.emergency_stop = self.db.load_emergency_stop()
+            logger.info(f"🛡️ Emergency stop loaded from DB: {self.emergency_stop}")
+        else:
+            self.emergency_stop = False
+        
         self.paused = False
         
         # Статистика за день
@@ -424,11 +441,15 @@ class SafetyManager:
     def activate_emergency_stop(self):
         """Активировать экстренную остановку"""
         self.emergency_stop = True
+        if self.db:
+            self.db.save_emergency_stop(True)
         logger.critical("🚨 EMERGENCY STOP ACTIVATED!")
     
     def deactivate_emergency_stop(self):
         """Снять экстренную остановку"""
         self.emergency_stop = False
+        if self.db:
+            self.db.save_emergency_stop(False)
         logger.info("✅ Emergency stop deactivated")
     
     def pause_trading(self):
@@ -574,7 +595,7 @@ class TradingAgent:
         except:
             logger.warning("Could not fetch initial balance, using $1000")
         
-        self.safety = SafetyManager(initial_balance)
+        self.safety = SafetyManager(initial_balance, db=self.db)
         logger.info(f"🛡️ Safety initialized with balance: ${initial_balance:.2f}")
         
         # Trading mode (из .env для безопасности)
@@ -849,6 +870,12 @@ class TradingAgent:
             df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df_4h['timestamp'] = pd.to_datetime(df_4h['timestamp'], unit='ms')
             
+            # Calculate 4h indicators for trend confirmation
+            df_4h['ema20'] = df_4h['close'].ewm(span=20, adjust=False).mean()
+            df_4h['ema50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
+            trend_4h_bullish = df_4h['ema20'].iloc[-1] > df_4h['ema50'].iloc[-1]
+            trend_4h_bearish = df_4h['ema20'].iloc[-1] < df_4h['ema50'].iloc[-1]
+            
             # Use 1h for main analysis
             df = df_1h
 
@@ -947,7 +974,13 @@ class TradingAgent:
                 elif predicted_price < current_price * 0.99:
                     sell_filters += 1
                     
-            # Filter 8: Support/Resistance (simple: 20-period high/low)
+            # Filter 8: 4h Trend Confirmation
+            if trend_4h_bullish:
+                buy_filters += 1
+            elif trend_4h_bearish:
+                sell_filters += 1
+            
+            # Filter 9 (was 8): Support/Resistance (simple: 20-period high/low)
             period_high = df['high'].rolling(20).max().iloc[-1]
             period_low = df['low'].rolling(20).min().iloc[-1]
             if current_price < period_low * 1.01:  # Near support
@@ -1347,6 +1380,19 @@ class TradingAgent:
         usdt_amount = trade_info['usdt_amount']
         fee = trade_info['fee']
         atr = trade_info.get('atr', 0)
+        
+        # ✅ CHECK BALANCE BEFORE TRADE
+        try:
+            balance = self.exchange.fetch_balance()
+            available_usdt = balance['USDT']['free']
+            if available_usdt < usdt_amount:
+                logger.error(f"❌ Insufficient balance: need ${usdt_amount:.2f}, have ${available_usdt:.2f}")
+                asyncio.run(self.send_telegram_message(self.operator_chat_id, 
+                    f"⚠️ Недостаточно средств для {symbol}\nТребуется: ${usdt_amount:.2f}\nДоступно: ${available_usdt:.2f}"))
+                del self.trade_confirmation_needed[trade_id]
+                return False
+        except Exception as balance_error:
+            logger.error(f"Failed to check balance: {balance_error}")
         
         try:
             # Save trade to database

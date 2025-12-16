@@ -84,6 +84,21 @@ class TradingDatabase:
             )
         ''')
         
+        # Таблица состояния системы безопасности
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS safety_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                emergency_stop BOOLEAN DEFAULT 0,
+                paused BOOLEAN DEFAULT 0,
+                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Инициализация safety_state если пустая
+        cursor.execute('SELECT COUNT(*) FROM safety_state')
+        if cursor.fetchone()[0] == 0:
+            cursor.execute('INSERT INTO safety_state (id, emergency_stop, paused) VALUES (1, 0, 0)')
+        
         conn.commit()
         conn.close()
         logger.info(f"Database initialized: {self.db_path}")
@@ -178,6 +193,41 @@ class TradingDatabase:
         """Получить открытые сделки"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+    
+    def save_emergency_stop(self, is_active):
+        """Сохранить состояние emergency_stop"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE safety_state 
+            SET emergency_stop = ?, last_updated = ?
+            WHERE id = 1
+        ''', (1 if is_active else 0, datetime.now()))
+        conn.commit()
+        conn.close()
+        logger.info(f"Emergency stop state saved: {is_active}")
+    
+    def load_emergency_stop(self):
+        """Загрузить состояние emergency_stop"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT emergency_stop FROM safety_state WHERE id = 1')
+        result = cursor.fetchone()
+        conn.close()
+        return bool(result[0]) if result else False
+    
+    def save_paused_state(self, is_paused):
+        """Сохранить состояние паузы"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE safety_state 
+            SET paused = ?, last_updated = ?
+            WHERE id = 1
+        ''', (1 if is_paused else 0, datetime.now()))
+        conn.commit()
+        conn.close()
+        logger.info(f"Paused state saved: {is_paused}")
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM trades WHERE status = "open" ORDER BY entry_time DESC')
         rows = cursor.fetchall()
