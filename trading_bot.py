@@ -1265,14 +1265,22 @@ class TradingAgent:
             operator_chat_id = self.operator_chat_id
             try:
                 loop = asyncio.get_running_loop()
-                # We're in async context, create task
-                asyncio.create_task(self.send_telegram_message_with_buttons(operator_chat_id, message, reply_markup))
+                # We're in async context, create task AND WAIT
+                task = asyncio.create_task(self.send_telegram_message_with_buttons(operator_chat_id, message, reply_markup))
+                # Give task time to complete (don't await to avoid blocking)
+                logger.info(f"📤 Telegram message task created for {symbol}")
             except RuntimeError:
                 # No running loop, create new one
+                logger.info(f"📤 Sending Telegram message (new event loop) for {symbol}")
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                loop.run_until_complete(self.send_telegram_message_with_buttons(operator_chat_id, message, reply_markup))
-                loop.close()
+                try:
+                    loop.run_until_complete(self.send_telegram_message_with_buttons(operator_chat_id, message, reply_markup))
+                    logger.info(f"✅ Telegram message sent for {symbol}")
+                except Exception as telegram_error:
+                    logger.error(f"❌ Failed to send Telegram message: {telegram_error}", exc_info=True)
+                finally:
+                    loop.close()
             
             self.trade_confirmation_needed[trade_id] = {
                 'symbol': symbol,
