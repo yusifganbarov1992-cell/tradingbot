@@ -1,0 +1,60 @@
+# ========================================
+# СУЩЕСТВУЮЩИЕ ЗАВИСИМОСТИ
+# ========================================
+python-telegram-bot==22.1
+python-dotenv==1.0.0
+ccxt==4.2.19
+pandas==2.1.4
+numpy==1.26.2
+openai==1.54.0
+
+# Database
+supabase==2.10.0
+
+# ========================================
+# НОВЫЕ ЗАВИСИМОСТИ ДЛЯ УМНОГО БОТА
+# ========================================
+
+# Reinforcement Learning
+stable-baselines3==2.2.1
+gymnasium==0.29.1
+sb3-contrib==2.2.1
+
+# Technical Analysis
+ta==0.11.0
+pandas-ta==0.3.14b0
+
+# Backtesting & Analysis
+backtesting==0.3.3
+vectorbt==0.26.2
+
+# AI/ML
+transformers==4.36.0
+torch==2.1.2
+optuna==3.5.0
+prophet==1.1.5
+scikit-learn==1.3.2
+joblib==1.3.2
+
+# Dashboard
+streamlit==1.29.0
+plotly==5.18.0
+dash==2.14.2
+
+# Utils
+PyYAML==6.0.1
+requests==2.31.0
+beautifulsoup4==4.12.2
+
+# Market Data
+yfinance==0.2.33
+cryptofeed==2.4.0
+
+# Hidden Markov Models (для market regime)
+hmmlearn==0.3.0
+
+# Time Series
+statsmodels==0.14.1
+
+# Typing
+typing-extensions==4.9.0

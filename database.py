@@ -193,6 +193,11 @@ class TradingDatabase:
         """Получить открытые сделки"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM trades WHERE status = 'open'")
+        trades = cursor.fetchall()
+        conn.close()
+        return [dict(trade) for trade in trades] if trades else []
     
     def save_emergency_stop(self, is_active):
         """Сохранить состояние emergency_stop"""
@@ -240,6 +245,21 @@ class TradingDatabase:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM trades ORDER BY entry_time DESC LIMIT ?', (limit,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+    
+    def get_closed_trades_since(self, days=7):
+        """Получить закрытые сделки за последние N дней"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT * FROM trades 
+            WHERE status = 'closed' 
+            AND exit_time >= datetime('now', '-' || ? || ' days')
+            ORDER BY exit_time DESC
+        ''', (days,))
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]

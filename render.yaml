@@ -1,0 +1,57 @@
+# Render.com deployment configuration
+# FREE tier - 750 hours/month
+
+services:
+  # Main trading bot
+  - type: worker
+    name: nexustrader-bot
+    env: python
+    runtime: python3.11
+    buildCommand: pip install -r requirements.txt
+    startCommand: python modules/watchdog.py
+    envVars:
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: PAPER_TRADING
+        value: "true"
+      - key: AUTO_TRADE
+        value: "true"
+      - key: MIN_CONFIDENCE
+        value: "7.0"
+      - key: POSITION_SIZE_PCT
+        value: "2.0"
+      - key: STOP_LOSS_PCT
+        value: "2.0"
+      - key: TAKE_PROFIT_PCT
+        value: "4.0"
+
+  # Dashboard (optional - uses free web service quota)
+  - type: web
+    name: nexustrader-dashboard
+    env: python
+    runtime: python3.11
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run dashboard/app.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: PAPER_TRADING
+        value: "true"

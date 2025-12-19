@@ -1,0 +1,89 @@
+# Конфигурация стратегии умного бота
+
+# AUTO TRADE настройки
+auto_trade:
+  enabled: false  # Включить автономную торговлю
+  min_confidence: 7.0  # Минимальная уверенность AI (0-10)
+  max_trades_per_hour: 3  # Макс. сделок в час
+  max_concurrent_positions: 5  # Макс. открытых позиций
+  emergency_stop_loss_pct: 0.05  # Emergency stop на -5%
+
+# Фильтры
+filters:
+  min_filters_required: 7  # Мин. кол-во сработавших фильтров из 9
+  rsi_oversold: 30
+  rsi_overbought: 70
+  volume_spike_multiplier: 1.5
+  atr_max_ratio: 0.02  # 2% от цены
+
+# Управление рисками
+risk_management:
+  max_position_size_pct: 10  # Макс. размер позиции % от баланса
+  max_total_exposure_pct: 30  # Макс. общая экспозиция
+  use_kelly_criterion: true  # Использовать Kelly Criterion
+  kelly_fraction: 0.5  # Половина Kelly для консерватизма
+
+# Performance Analyzer
+performance:
+  min_trades_for_analysis: 10  # Мин. сделок для анализа
+  lookback_days: 30  # Анализ за последние N дней
+  sharpe_target: 2.0  # Целевой Sharpe ratio
+  max_drawdown_threshold: 0.15  # Макс. просадка 15%
+
+# Adaptive Learning
+learning:
+  enabled: true
+  mode: 'rl'  # 'rl' (reinforcement) или 'genetic'
+  training_frequency_hours: 24  # Переобучение каждые 24 часа
+  min_training_samples: 50  # Мин. сделок для обучения
+  
+  # RL параметры
+  rl:
+    algorithm: 'PPO'  # PPO, A2C, DQN
+    learning_rate: 0.0003
+    gamma: 0.99  # Discount factor
+    
+  # Genetic Algorithm параметры
+  genetic:
+    population_size: 50
+    generations: 100
+    mutation_rate: 0.1
+
+# Market Regime Detection
+market_regime:
+  enabled: true
+  regimes:
+    - TREND_UP
+    - TREND_DOWN
+    - RANGE
+    - HIGH_VOLATILITY
+    - CRASH
+  
+  # Адаптация под режим
+  adaptations:
+    CRASH:
+      min_confidence: 9.0  # Повысить порог
+      max_position_size_pct: 5  # Уменьшить размер
+      pause_trading: false  # Можно включить
+    TREND_UP:
+      min_confidence: 6.5  # Понизить порог
+      max_position_size_pct: 12  # Увеличить размер
+    RANGE:
+      min_confidence: 7.5
+      max_position_size_pct: 8
+
+# Sentiment Analysis
+sentiment:
+  enabled: false  # Требует API ключи
+  sources:
+    - twitter
+    - reddit
+    - news
+  min_sentiment_score: -0.3  # Мин. sentiment для входа
+  sentiment_weight: 0.2  # Вес sentiment в решении (0-1)
+
+# Dashboard
+dashboard:
+  port: 8501
+  auto_refresh_seconds: 5
+  show_debug_info: false

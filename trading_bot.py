@@ -605,6 +605,71 @@ class TradingAgent:
         else:
             logger.info("✅ Paper trading mode (safe)")
         
+        # 🤖 AUTO_TRADE MODE - умный автономный режим
+        from modules.autonomous_trader import AutonomousTrader
+        self.autonomous = AutonomousTrader(
+            auto_trade_enabled=os.getenv('AUTO_TRADE', 'false').lower() == 'true',
+            min_confidence=float(os.getenv('AUTO_MIN_CONFIDENCE', '7.0')),
+            max_trades_per_hour=int(os.getenv('AUTO_MAX_TRADES_HOUR', '3')),
+            max_concurrent_positions=int(os.getenv('AUTO_MAX_POSITIONS', '5')),
+            whitelist=os.getenv('AUTO_WHITELIST', '').split(',') if os.getenv('AUTO_WHITELIST') else [],
+            blacklist=os.getenv('AUTO_BLACKLIST', 'LUNA,FTT,USTC').split(',')
+        )
+        logger.info(f"🤖 AUTO_TRADE mode: {'ENABLED' if self.autonomous.enabled else 'DISABLED'}")
+        
+        # 📊 PERFORMANCE ANALYZER - самоанализ результатов
+        from modules.performance_analyzer import PerformanceAnalyzer
+        self.performance = PerformanceAnalyzer(db_path=self.db.db_path)
+        logger.info("📊 PerformanceAnalyzer initialized")
+        
+        # 🧠 ADAPTIVE LEARNING - RL для оптимизации параметров
+        try:
+            from modules.adaptive_learning import AdaptiveLearning
+            self.adaptive = AdaptiveLearning(db_path=self.db.db_path)
+            logger.info(f"🧠 AdaptiveLearning initialized (Trained: {self.adaptive.is_trained})")
+        except Exception as e:
+            logger.warning(f"⚠️ AdaptiveLearning initialization failed: {e}")
+            self.adaptive = None
+        
+        # 📊 MARKET REGIME DETECTION - HMM для определения состояния рынка
+        try:
+            from modules.market_regime import MarketRegimeManager
+            self.regime_manager = MarketRegimeManager(db_path=self.db.db_path)
+            logger.info("📊 MarketRegimeManager initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ MarketRegimeManager initialization failed: {e}")
+            self.regime_manager = None
+        
+        # 💭 SENTIMENT ANALYSIS - Анализ настроений рынка (Fear & Greed)
+        try:
+            from modules.sentiment_analyzer import SentimentAnalyzer
+            self.sentiment_analyzer = SentimentAnalyzer()
+            logger.info("💭 SentimentAnalyzer initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ SentimentAnalyzer initialization failed: {e}")
+            self.sentiment_analyzer = None
+        
+        # 🤖 INTELLIGENT AI - Multi-model ensemble (LSTM + Patterns)
+        try:
+            from modules.intelligent_ai import IntelligentAI
+            self.intelligent_ai = IntelligentAI()
+            logger.info("🤖 IntelligentAI initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ IntelligentAI initialization failed: {e}")
+            self.intelligent_ai = None
+        
+        # 💼 ADVANCED RISK MANAGER - Kelly Criterion, VaR, ATR-based SL
+        try:
+            from modules.risk_manager import AdvancedRiskManager
+            self.risk_manager = AdvancedRiskManager(
+                initial_balance=self.initial_balance,
+                max_risk_per_trade=0.02  # 2% max risk per trade
+            )
+            logger.info("💼 AdvancedRiskManager initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ AdvancedRiskManager initialization failed: {e}")
+            self.risk_manager = None
+        
         # Cache for markets
         self.markets_cache = None
         self.markets_cache_time = 0
@@ -1261,37 +1326,112 @@ class TradingAgent:
                 except Exception as e:
                     logger.warning(f"⚠️ Supabase save_signal failed: {e}")
             
-            # Send message to Telegram (use existing event loop if available)
-            operator_chat_id = self.operator_chat_id
-            try:
-                loop = asyncio.get_running_loop()
-                # We're in async context, create task AND WAIT
-                task = asyncio.create_task(self.send_telegram_message_with_buttons(operator_chat_id, message, reply_markup))
-                # Give task time to complete (don't await to avoid blocking)
-                logger.info(f"📤 Telegram message task created for {symbol}")
-            except RuntimeError:
-                # No running loop, create new one
-                logger.info(f"📤 Sending Telegram message (new event loop) for {symbol}")
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(self.send_telegram_message_with_buttons(operator_chat_id, message, reply_markup))
-                    logger.info(f"✅ Telegram message sent for {symbol}")
-                except Exception as telegram_error:
-                    logger.error(f"❌ Failed to send Telegram message: {telegram_error}", exc_info=True)
-                finally:
-                    loop.close()
+            # 🤖 AUTONOMOUS DECISION: Should we execute automatically?
+            balance_data = self.exchange.fetch_balance()
+            current_balance = balance_data['USDT']['free']
             
-            self.trade_confirmation_needed[trade_id] = {
-                'symbol': symbol,
-                'side': signal,
-                'price': current_price,
-                'amount': crypto_amount,
-                'usdt_amount': usdt_amount,
-                'fee': fee,
-                'atr': signal_data['current_atr']
-            }
-            logger.info(f"Signal sent to Telegram: {signal} {symbol} (AI: {ai_confidence}/10)")
+            should_auto, auto_reason = self.autonomous.should_execute_auto(
+                signal_data={
+                    'symbol': symbol,
+                    'ai_confidence': ai_confidence,
+                    'usdt_amount': usdt_amount,
+                    'signal': signal,
+                    'price': current_price,
+                    'crypto_amount': crypto_amount
+                },
+                active_positions=self.active_positions,
+                balance=current_balance
+            )
+            
+            if should_auto:
+                # ✅ AUTO EXECUTE - выполнить сделку БЕЗ подтверждения
+                logger.info(f"🤖 AUTO TRADE EXECUTING: {symbol} {signal} - {auto_reason}")
+                
+                try:
+                    # Выполнить сделку напрямую
+                    success = self._execute_trade_directly(
+                        trade_id=trade_id,
+                        symbol=symbol,
+                        side=signal,
+                        amount=crypto_amount,
+                        price=current_price,
+                        usdt_amount=usdt_amount,
+                        fee=fee,
+                        atr=signal_data['current_atr']
+                    )
+                    
+                    if success:
+                        # Записать в tracker
+                        self.autonomous.record_trade()
+                        
+                        # Отправить уведомление (не ждем подтверждения!)
+                        auto_message = (
+                            f"🤖 АВТОМАТИЧЕСКАЯ СДЕЛКА ВЫПОЛНЕНА\n\n"
+                            f"📊 Монета: {symbol}\n"
+                            f"💰 Цена: ${current_price:.2f}\n"
+                            f"📦 Размер: {crypto_amount:.6f} (~${usdt_amount:.2f})\n"
+                            f"📈 Сигнал: {signal}\n"
+                            f"🤖 AI Уверенность: {ai_confidence}/10\n\n"
+                            f"✅ Причина: {auto_reason}\n\n"
+                            f"⏰ Время: {datetime.now().strftime('%H:%M:%S')}\n"
+                            f"Режим: {'ИМИТАЦИЯ' if self.paper_trading else 'РЕАЛЬНАЯ СДЕЛКА'}"
+                        )
+                        
+                        operator_chat_id = self.operator_chat_id
+                        try:
+                            loop = asyncio.get_running_loop()
+                            asyncio.create_task(self.send_telegram_message(operator_chat_id, auto_message))
+                        except RuntimeError:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                loop.run_until_complete(self.send_telegram_message(operator_chat_id, auto_message))
+                            except Exception as e:
+                                logger.error(f"Failed to send auto-trade notification: {e}")
+                            finally:
+                                loop.close()
+                        
+                        logger.info(f"✅ AUTO TRADE COMPLETED: {symbol} {signal}")
+                    else:
+                        logger.error(f"❌ AUTO TRADE FAILED: {symbol} {signal}")
+                        
+                except Exception as e:
+                    logger.error(f"❌ AUTO TRADE ERROR: {symbol} - {e}", exc_info=True)
+            else:
+                # ⏸️ MANUAL CONFIRMATION - требуется подтверждение
+                logger.info(f"⏸️  Manual confirmation required: {auto_reason}")
+                
+                # Send message to Telegram (use existing event loop if available)
+                operator_chat_id = self.operator_chat_id
+                try:
+                    loop = asyncio.get_running_loop()
+                    # We're in async context, create task AND WAIT
+                    task = asyncio.create_task(self.send_telegram_message_with_buttons(operator_chat_id, message, reply_markup))
+                    # Give task time to complete (don't await to avoid blocking)
+                    logger.info(f"📤 Telegram message task created for {symbol}")
+                except RuntimeError:
+                    # No running loop, create new one
+                    logger.info(f"📤 Sending Telegram message (new event loop) for {symbol}")
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(self.send_telegram_message_with_buttons(operator_chat_id, message, reply_markup))
+                        logger.info(f"✅ Telegram message sent for {symbol}")
+                    except Exception as telegram_error:
+                        logger.error(f"❌ Failed to send Telegram message: {telegram_error}", exc_info=True)
+                    finally:
+                        loop.close()
+                
+                self.trade_confirmation_needed[trade_id] = {
+                    'symbol': symbol,
+                    'side': signal,
+                    'price': current_price,
+                    'amount': crypto_amount,
+                    'usdt_amount': usdt_amount,
+                    'fee': fee,
+                    'atr': signal_data['current_atr']
+                }
+                logger.info(f"Signal sent to Telegram: {signal} {symbol} (AI: {ai_confidence}/10)")
             
         except Exception as e:
             logger.error(f"Error sending signal to Telegram: {e}", exc_info=True)
@@ -1407,12 +1547,34 @@ class TradingAgent:
             stop_loss = price - (2 * atr) if side == 'BUY' else price + (2 * atr)
             take_profit = price + (3 * atr) if side == 'BUY' else price - (3 * atr)
             
+            # 🔥 REAL ORDER EXECUTION (if not paper trading)
+            actual_price = price
+            order_id = None
+            
+            if not self.paper_trading:
+                try:
+                    logger.info(f"📤 Placing REAL {side} order: {amount} {symbol}")
+                    if side == 'BUY':
+                        order = self.exchange.create_market_buy_order(symbol, amount)
+                    else:
+                        order = self.exchange.create_market_sell_order(symbol, amount)
+                    
+                    order_id = order.get('id')
+                    actual_price = float(order.get('average', price) or price)
+                    logger.info(f"✅ REAL ORDER EXECUTED: {order_id} @ ${actual_price:.2f}")
+                except Exception as order_error:
+                    logger.error(f"❌ REAL ORDER FAILED: {order_error}")
+                    del self.trade_confirmation_needed[trade_id]
+                    return False
+            else:
+                logger.info(f"📝 PAPER TRADE: {side} {amount} {symbol} @ ${price:.2f}")
+            
             # Сохранение в SQLite (основное)
             self.db.save_trade(
                 trade_id=trade_id,
                 symbol=symbol,
                 side=side,
-                entry_price=price,
+                entry_price=actual_price,
                 amount=amount,
                 usdt_amount=usdt_amount,
                 fee=fee,
@@ -1467,6 +1629,119 @@ class TradingAgent:
             logger.error(f"Failed to execute trade {trade_id}: {e}")
             return False
     
+    def _execute_trade_directly(
+        self,
+        trade_id: str,
+        symbol: str,
+        side: str,
+        amount: float,
+        price: float,
+        usdt_amount: float,
+        fee: float,
+        atr: float
+    ) -> bool:
+        """
+        🤖 Execute trade directly WITHOUT manual approval (AUTO_TRADE mode)
+        
+        Args:
+            trade_id: Unique trade ID
+            symbol: Trading pair
+            side: BUY/SELL
+            amount: Crypto amount
+            price: Entry price
+            usdt_amount: USDT amount
+            fee: Trading fee
+            atr: ATR value for stops
+            
+        Returns:
+            success: bool
+        """
+        try:
+            # Calculate stops (same as manual execution)
+            if side == 'BUY':
+                stop_loss = price - (2 * atr)
+                take_profit = price + (3 * atr)
+            else:
+                stop_loss = price + (2 * atr)
+                take_profit = price - (3 * atr)
+            
+            # 🔥 REAL ORDER EXECUTION (if not paper trading)
+            actual_price = price
+            order_id = None
+            
+            if not self.paper_trading:
+                try:
+                    logger.info(f"📤 Placing REAL {side} order: {amount} {symbol}")
+                    if side == 'BUY':
+                        order = self.exchange.create_market_buy_order(symbol, amount)
+                    else:
+                        order = self.exchange.create_market_sell_order(symbol, amount)
+                    
+                    order_id = order.get('id')
+                    actual_price = float(order.get('average', price) or price)
+                    logger.info(f"✅ REAL ORDER EXECUTED: {order_id} @ ${actual_price:.2f}")
+                except Exception as order_error:
+                    logger.error(f"❌ REAL ORDER FAILED: {order_error}")
+                    return False
+            else:
+                logger.info(f"📝 PAPER TRADE: {side} {amount} {symbol} @ ${price:.2f}")
+            
+            # Save to database (SQLite)
+            self.db.save_trade(
+                trade_id=trade_id,
+                symbol=symbol,
+                side=side,
+                entry_price=actual_price,
+                amount=amount,
+                usdt_amount=usdt_amount,
+                fee=fee,
+                mode='paper' if self.paper_trading else 'real',
+                stop_loss=stop_loss,
+                take_profit=take_profit
+            )
+            
+            # Save to Supabase (cloud backup)
+            if self.supabase_db:
+                try:
+                    self.supabase_db.save_trade(
+                        trade_id=trade_id,
+                        symbol=symbol,
+                        side=side,
+                        entry_price=price,
+                        amount=amount,
+                        usdt_amount=usdt_amount,
+                        fee=fee,
+                        mode='paper' if self.paper_trading else 'real',
+                        stop_loss=stop_loss,
+                        take_profit=take_profit
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ Supabase save_trade failed: {e}")
+            
+            # Add to active positions
+            self.active_positions[symbol] = {
+                'trade_id': trade_id,
+                'symbol': symbol,
+                'side': side,
+                'entry_price': price,
+                'amount': amount,
+                'usdt_amount': usdt_amount,
+                'fee': fee,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'entry_time': datetime.now(),
+                'atr': atr
+            }
+            
+            # Update signal status
+            self.db.update_signal_status(trade_id, 'auto_approved')
+            
+            logger.info(f"🤖 AUTO TRADE executed: {side} {symbol} @ ${price:.2f} (ID: {trade_id})")
+            return True
+        except Exception as e:
+            logger.error(f"❌ AUTO TRADE FAILED {trade_id}: {e}", exc_info=True)
+            return False
+    
     def close_position(self, symbol: str, exit_price: float, reason: str = "Manual close") -> None:
         """Close a position and update database"""
         if symbol not in self.active_positions:
@@ -1482,13 +1757,32 @@ class TradingAgent:
         fee = position['fee']
         entry_time = position['entry_time']
         
+        # 🔥 REAL ORDER TO CLOSE POSITION (if not paper trading)
+        actual_exit_price = exit_price
+        if not self.paper_trading:
+            try:
+                logger.info(f"📤 Closing REAL position: {amount} {symbol}")
+                # Opposite order to close
+                if side == 'BUY':
+                    order = self.exchange.create_market_sell_order(symbol, amount)
+                else:
+                    order = self.exchange.create_market_buy_order(symbol, amount)
+                
+                actual_exit_price = float(order.get('average', exit_price) or exit_price)
+                logger.info(f"✅ REAL POSITION CLOSED @ ${actual_exit_price:.2f}")
+            except Exception as order_error:
+                logger.error(f"❌ FAILED TO CLOSE REAL POSITION: {order_error}")
+                # Restore position if order failed
+                self.active_positions[symbol] = position
+                return
+        
         # Calculate P&L
         if side == 'BUY':
-            pnl = (exit_price - entry_price) * amount
-            pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+            pnl = (actual_exit_price - entry_price) * amount
+            pnl_pct = ((actual_exit_price - entry_price) / entry_price) * 100
         else:
-            pnl = (entry_price - exit_price) * amount
-            pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+            pnl = (entry_price - actual_exit_price) * amount
+            pnl_pct = ((entry_price - actual_exit_price) / entry_price) * 100
         
         # Apply fees
         exit_fee = self.risk_engine.calculate_fees(usdt_amount)
@@ -1544,6 +1838,14 @@ class TradingAgent:
             loop.close()
         
         logger.info(f"Position closed: {symbol} at ${exit_price:.2f} ({reason}) P&L: {pnl_pct:+.2f}%")
+        
+        # 📊 Периодический анализ производительности
+        try:
+            if hasattr(self, 'performance') and len(self.db.get_closed_trades_since(days=7)) >= 5:
+                analysis = self.performance.analyze_closed_trades(days=7)
+                logger.info(f"📊 Weekly performance: Win rate {analysis.get('win_rate', 0)}%, ROI {analysis.get('roi', 0)}%")
+        except Exception as e:
+            logger.warning(f"Performance analysis failed: {e}")
     
     def analyze_all_markets(self) -> None:
         """Analyze all symbols and send TOP-3 AI signals
@@ -1749,19 +2051,49 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/portfolio - AI анализ портфеля\n"
         "/history - История сделок\n"
         "/analyze - Ручной анализ рынка\n\n"
+        "🤖 AUTO_TRADE (Автономный режим):\n"
+        "/auto_status - Статус AUTO_TRADE\n"
+        "/auto_toggle - Включить/Выключить\n"
+        "/auto_aggressive - Агрессивный режим\n"
+        "/auto_emergency - 🚨 Остановить AUTO_TRADE\n\n"
+        "� PERFORMANCE (Анализ результатов):\n"
+        "/performance - Дневной отчет\n"
+        "/analytics - 30-дневная статистика\n"
+        "/recommendations - Рекомендации от ИИ\n"
+        "/filters - Эффективность фильтров\n"
+        "/optimize - Оптимальные параметры\n\n"
         "🛡️ БЕЗОПАСНОСТЬ:\n"
         "/safety - Статус защиты (8 уровней)\n"
         "/pause - Приостановить торговлю\n"
         "/resume - Возобновить торговлю\n"
         "/emergency_stop - 🚨 ЭКСТРЕННАЯ ОСТАНОВКА\n\n"
         "✨ ВОЗМОЖНОСТИ:\n"
+        "- 🤖 Автономная торговля (AUTO_TRADE)\n"
+        "- 📊 Самоанализ производительности\n"
+        "- 🧠 Adaptive Learning (Reinforcement Learning)\n"
+        "- 📊 Market Regime Detection (HMM)\n"
+        "- 💭 Sentiment Analysis (Fear & Greed)\n"
+        "- 🤖 Intelligent AI (LSTM + Patterns)\n"
+        "- 💼 Advanced Risk Management (Kelly, VaR, ATR)\n"
         "- 8-уровневая система защиты\n"
         "- Автосканирование топ-100 монет\n"
         "- AI анализ от OpenAI (GPT-4)\n"
         "- Оптимизированная стратегия (+1.75% ROI)\n"
         "- Автоматическое управление рисками\n"
         "- База данных сделок\n"
-        "- Trailing stop & Take Profit"
+        "- Trailing stop & Take Profit\n\n"
+        "💭 SENTIMENT ANALYSIS:\n"
+        "/sentiment - 📊 Общий sentiment рынка\n"
+        "/fear_greed - 😱 Fear & Greed Index\n"
+        "/sentiment_trend - 📈 Тренд sentiment (7 дней)\n\n"
+        "🤖 INTELLIGENT AI:\n"
+        "/ai_predict - 🔮 AI предсказание цены\n"
+        "/ai_train - 🎓 Обучить LSTM модель\n"
+        "/ai_patterns - 🎨 Обнаруженные паттерны\n\n"
+        "💼 RISK MANAGEMENT:\n"
+        "/risk - 📊 Полный анализ рисков\n"
+        "/var - 📉 Value at Risk (VaR)\n"
+        "/kelly - 🎯 Kelly Criterion sizing"
     )
     await update.message.reply_text(help_text)
 
@@ -2166,6 +2498,1210 @@ async def reject_trade_command(update: Update, context: ContextTypes.DEFAULT_TYP
     
     logger.info(f"Trade {trade_id} rejected by user {user_id}")
 
+# 🤖 ========================================
+# AUTO_TRADE TELEGRAM COMMANDS
+# ========================================
+
+async def auto_trade_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """🤖 Show AUTO_TRADE status and configuration"""
+    agent = context.bot_data['agent']
+    status = agent.autonomous.get_status()
+    
+    # Emoji статусы
+    enabled_emoji = "✅ ENABLED" if status['enabled'] else "❌ DISABLED"
+    paused_emoji = "🚨 PAUSED" if status['emergency_paused'] else ""
+    mode_emoji = "⚡ AGGRESSIVE" if status['aggressive_mode'] else "🛡️ CONSERVATIVE"
+    
+    message = f'''
+🤖 **AUTO_TRADE STATUS**
+
+{enabled_emoji} {paused_emoji}
+{mode_emoji}
+
+📊 **Statistics:**
+• Trades this hour: {status['trades_this_hour']}/{status['max_trades_per_hour']}
+• Last trade: {status['last_trade'] or 'Never'}
+
+⚙️ **Configuration:**
+• Min confidence: {status['min_confidence']}/10
+• Whitelist: {status['whitelist_count']} symbols
+• Blacklist: {status['blacklist_count']} symbols
+
+💡 **Commands:**
+/auto_toggle - Enable/Disable AUTO_TRADE
+/auto_aggressive - Toggle aggressive mode
+/auto_emergency - Emergency stop AUTO_TRADE
+'''
+    await update.message.reply_text(message)
+
+async def auto_trade_toggle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """🤖 Toggle AUTO_TRADE on/off"""
+    agent = context.bot_data['agent']
+    agent.autonomous.enabled = not agent.autonomous.enabled
+    
+    status = '✅ ENABLED' if agent.autonomous.enabled else '❌ DISABLED'
+    
+    message = f"🤖 AUTO_TRADE: {status}"
+    
+    if agent.autonomous.enabled:
+        message += "\n\n⚠️ Bot will now execute trades AUTOMATICALLY without your approval!"
+        message += f"\n• Min confidence: {agent.autonomous.min_confidence}/10"
+        message += f"\n• Max {agent.autonomous.max_trades_per_hour} trades/hour"
+        message += "\n\n💡 Use /auto_emergency to stop immediately"
+    else:
+        message += "\n\n✅ Bot will now ASK for your approval before each trade"
+    
+    await update.message.reply_text(message)
+    logger.info(f"AUTO_TRADE toggled: {status} by user {update.message.from_user.id}")
+
+async def auto_trade_emergency_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """🚨 EMERGENCY STOP AUTO_TRADE"""
+    agent = context.bot_data['agent']
+    agent.autonomous.emergency_stop(reason="Manual Telegram command")
+    
+    message = "🚨 **EMERGENCY STOP ACTIVATED!**\n\n"
+    message += "✅ AUTO_TRADE stopped immediately\n"
+    message += "🔒 All automatic trading blocked\n\n"
+    message += "💡 Use /auto_toggle to resume trading"
+    
+    await update.message.reply_text(message)
+    logger.critical(f"AUTO_TRADE emergency stop by user {update.message.from_user.id}")
+
+async def auto_trade_aggressive_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """⚡ Toggle aggressive/conservative mode"""
+    agent = context.bot_data['agent']
+    agent.autonomous.set_aggressive(not agent.autonomous.aggressive_mode)
+    
+    mode = "⚡ AGGRESSIVE" if agent.autonomous.aggressive_mode else "🛡️ CONSERVATIVE"
+    
+    message = f"🤖 AUTO_TRADE MODE: {mode}\n\n"
+    
+    if agent.autonomous.aggressive_mode:
+        message += "⚡ Aggressive mode:\n"
+        message += "• Accepts confidence 8+/10\n"
+        message += "• More trades, higher risk\n"
+        message += "• Recommended for strong markets"
+    else:
+        message += "🛡️ Conservative mode:\n"
+        message += f"• Requires confidence {agent.autonomous.min_confidence}+/10\n"
+        message += "• Fewer trades, safer\n"
+        message += "• Recommended for volatile markets"
+    
+    await update.message.reply_text(message)
+    logger.info(f"AUTO_TRADE mode changed to {mode} by user {update.message.from_user.id}")
+
+# ========================================
+# PERFORMANCE ANALYSIS COMMANDS (Phase 3)
+# ========================================
+
+async def performance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """📊 Show daily performance report"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'performance'):
+        await update.message.reply_text("⚠️ PerformanceAnalyzer не инициализирован")
+        return
+    
+    try:
+        report = agent.performance.generate_daily_report()
+        await update.message.reply_text(report, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка генерации отчета: {e}")
+        logger.error(f"Performance report error: {e}")
+
+async def analytics_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """📈 Show 30-day analytics"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'performance'):
+        await update.message.reply_text("⚠️ PerformanceAnalyzer не инициализирован")
+        return
+    
+    try:
+        analysis = agent.performance.analyze_closed_trades(days=30)
+        
+        if 'message' in analysis:
+            await update.message.reply_text(analysis['message'])
+            return
+        
+        # Format best/worst trades
+        best_trade = analysis.get('best_trade', {})
+        worst_trade = analysis.get('worst_trade', {})
+        
+        best_text = f"{best_trade.get('symbol', 'N/A')} (+${best_trade.get('pnl', 0):.2f})" if best_trade else 'N/A'
+        worst_text = f"{worst_trade.get('symbol', 'N/A')} (${worst_trade.get('pnl', 0):.2f})" if worst_trade else 'N/A'
+        
+        message = f"""📊 *30-DAY ANALYTICS*
+
+📊 Total Trades: {analysis.get('total_trades', 0)}
+✅ Winning: {analysis.get('winning_trades', 0)}
+❌ Losing: {analysis.get('losing_trades', 0)}
+📈 Win Rate: {analysis.get('win_rate', 0):.1f}%
+
+💰 Total P&L: ${analysis.get('total_pnl', 0):.2f}
+📊 Avg Trade: ${analysis.get('avg_pnl', 0):.2f}
+📈 ROI: {analysis.get('roi', 0):.1f}%
+
+📊 Sharpe Ratio: {analysis.get('sharpe_ratio', 0):.2f}
+📉 Max Drawdown: ${analysis.get('max_drawdown', 0):.2f} ({analysis.get('max_drawdown_pct', 0):.1f}%)
+⏱ Avg Duration: {analysis.get('avg_duration_hours', 0):.1f}h
+
+🏆 Best Trade: {best_text}
+💔 Worst Trade: {worst_text}
+"""
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка анализа: {e}")
+        logger.error(f"Analytics error: {e}")
+
+async def recommendations_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """💡 Get AI recommendations"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'performance'):
+        await update.message.reply_text("⚠️ PerformanceAnalyzer не инициализирован")
+        return
+    
+    try:
+        recs = agent.performance.get_recommendations()
+        
+        if not recs:
+            await update.message.reply_text("💡 Недостаточно данных для рекомендаций. Продолжайте торговать! (минимум 10 сделок)")
+            return
+        
+        message = "💡 *РЕКОМЕНДАЦИИ ОТ ИИ:*\n\n"
+        for i, rec in enumerate(recs, 1):
+            message += f"{i}. {rec}\n\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка получения рекомендаций: {e}")
+        logger.error(f"Recommendations error: {e}")
+
+async def filters_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """🔍 Analyze filter effectiveness"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'performance'):
+        await update.message.reply_text("⚠️ PerformanceAnalyzer не инициализирован")
+        return
+    
+    try:
+        filters = agent.performance.analyze_filter_effectiveness(days=30)
+        
+        if 'message' in filters:
+            await update.message.reply_text(filters['message'])
+            return
+        
+        message = "🔍 *FILTER EFFECTIVENESS (30 days):*\n\n"
+        
+        for filter_name, stats in filters.items():
+            effectiveness = stats.get('effectiveness', 'UNKNOWN')
+            emoji = '✅' if effectiveness == 'HIGH' else '⚠️' if effectiveness == 'MEDIUM' else '❌'
+            
+            message += f"{emoji} *{filter_name}*:\n"
+            message += f"  Trades: {stats.get('trades', 0)}\n"
+            message += f"  Win Rate: {stats.get('win_rate', 0):.1f}%\n"
+            message += f"  Avg P&L: ${stats.get('avg_pnl', 0):.2f}\n"
+            message += f"  Effectiveness: {effectiveness}\n\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка анализа фильтров: {e}")
+        logger.error(f"Filters error: {e}")
+
+async def optimize_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """⚙️ Get optimal parameters from historical data"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'performance'):
+        await update.message.reply_text("⚠️ PerformanceAnalyzer не инициализирован")
+        return
+    
+    try:
+        optimal = agent.performance.get_optimal_parameters(days=30)
+        
+        if 'message' in optimal:
+            await update.message.reply_text(optimal['message'])
+            return
+        
+        message = f"""⚙️ *OPTIMAL PARAMETERS (30 days):*
+
+🎯 Confidence Range:
+  Best: {optimal.get('best_confidence_range', 'N/A')}
+  Win Rate: {optimal.get('best_win_rate', 0):.1f}%
+  Avg P&L: ${optimal.get('best_avg_pnl', 0):.2f}
+
+📊 Stop Loss:
+  Optimal: {optimal.get('optimal_stop_loss_pct', 0):.1f}%
+  (Based on {optimal.get('stop_loss_trades', 0)} trades)
+
+🎯 Take Profit:
+  Optimal: {optimal.get('optimal_take_profit_pct', 0):.1f}%
+  (Based on {optimal.get('take_profit_trades', 0)} trades)
+
+💰 Risk/Reward:
+  Average: {optimal.get('avg_risk_reward', 0):.2f}
+"""
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка оптимизации: {e}")
+        logger.error(f"Optimize error: {e}")
+
+# ========================================
+# ADAPTIVE LEARNING COMMANDS (Phase 4)
+# ========================================
+
+async def adaptive_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """🧠 Show adaptive learning status"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'adaptive') or agent.adaptive is None:
+        await update.message.reply_text("⚠️ AdaptiveLearning не инициализирован")
+        return
+    
+    try:
+        status = agent.adaptive.get_status()
+        
+        message = f"""🧠 *ADAPTIVE LEARNING STATUS*
+
+✅ Initialized: {status['is_trained']}
+📁 Model Path: `{status['model_path']}`
+💾 Model Exists: {status['model_exists']}
+🌍 Environment: {status['env_created']}
+🤖 Model Loaded: {status['model_loaded']}
+
+{'✅ Model готов к использованию!' if status['is_trained'] else '⚠️ Model требует обучения. Используйте /train_model'}
+"""
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+        logger.error(f"Adaptive status error: {e}")
+
+async def train_model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """🎓 Train the adaptive learning model"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'adaptive') or agent.adaptive is None:
+        await update.message.reply_text("⚠️ AdaptiveLearning не инициализирован")
+        return
+    
+    try:
+        await update.message.reply_text("🎓 Начинаю обучение RL модели...\nЭто займет 1-2 минуты ⏳")
+        
+        # Train with 5000 timesteps (quick training)
+        stats = agent.adaptive.train(total_timesteps=5000, verbose=0)
+        
+        message = f"""✅ *TRAINING COMPLETE!*
+
+📊 Total Timesteps: {stats['total_timesteps']}
+🏆 Mean Reward: {stats['mean_reward']:.2f}
+📈 Episodes: {len(stats['episode_rewards'])}
+
+Модель сохранена и готова к использованию!
+Используйте /adaptive_predict для получения оптимальных параметров.
+"""
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка обучения: {e}")
+        logger.error(f"Training error: {e}")
+
+async def adaptive_predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """🔮 Get AI-predicted optimal parameters"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'adaptive') or agent.adaptive is None:
+        await update.message.reply_text("⚠️ AdaptiveLearning не инициализирован")
+        return
+    
+    if not agent.adaptive.is_trained:
+        await update.message.reply_text("⚠️ Модель не обучена. Используйте /train_model сначала")
+        return
+    
+    try:
+        await update.message.reply_text("🔮 Анализирую текущее состояние рынка...")
+        
+        params = agent.adaptive.predict_optimal_parameters()
+        
+        # Compare with current params
+        current_confidence = agent.autonomous.min_confidence if hasattr(agent, 'autonomous') else 7.5
+        current_aggressive = agent.autonomous.aggressive_mode if hasattr(agent, 'autonomous') else False
+        
+        message = f"""🔮 *AI-PREDICTED OPTIMAL PARAMETERS*
+
+🎯 MIN_CONFIDENCE:
+  Current: {current_confidence}
+  Recommended: {params['min_confidence']:.1f}
+  {'✅ Оптимально' if abs(params['min_confidence'] - current_confidence) < 0.5 else '⚠️ Рекомендуется изменить'}
+
+📉 STOP_LOSS:
+  Recommended: {params['stop_loss_pct']:.1f}%
+
+📈 TAKE_PROFIT:
+  Recommended: {params['take_profit_pct']:.1f}%
+
+💰 POSITION_SIZE:
+  Recommended: {params['position_size_pct']:.1f}%
+
+⚡ MODE:
+  Current: {'AGGRESSIVE' if current_aggressive else 'CONSERVATIVE'}
+  Recommended: {'AGGRESSIVE' if params['aggressive'] else 'CONSERVATIVE'}
+  {'✅ Оптимально' if params['aggressive'] == current_aggressive else '⚠️ Рекомендуется изменить'}
+
+💡 Используйте /apply_adaptive для применения этих параметров
+"""
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка предсказания: {e}")
+        logger.error(f"Prediction error: {e}")
+
+async def apply_adaptive_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """✅ Apply AI-predicted parameters"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'adaptive') or agent.adaptive is None:
+        await update.message.reply_text("⚠️ AdaptiveLearning не инициализирован")
+        return
+    
+    if not agent.adaptive.is_trained:
+        await update.message.reply_text("⚠️ Модель не обучена. Используйте /train_model сначала")
+        return
+    
+    try:
+        params = agent.adaptive.predict_optimal_parameters()
+        
+        # Apply parameters to autonomous trader
+        if hasattr(agent, 'autonomous') and agent.autonomous:
+            agent.autonomous.min_confidence = params['min_confidence']
+            agent.autonomous.set_aggressive(params['aggressive'])
+            
+            message = f"""✅ *PARAMETERS APPLIED!*
+
+🤖 AUTO_TRADE обновлен:
+  MIN_CONFIDENCE: {params['min_confidence']:.1f}
+  MODE: {'AGGRESSIVE' if params['aggressive'] else 'CONSERVATIVE'}
+
+⚠️ Другие параметры (stop_loss, take_profit, position_size) 
+требуют обновления в .env файле:
+  STOP_LOSS_PCT={params['stop_loss_pct']:.1f}
+  TAKE_PROFIT_PCT={params['take_profit_pct']:.1f}
+  POSITION_SIZE_PCT={params['position_size_pct']:.1f}
+
+Рекомендуется перезапустить бота после обновления .env
+"""
+        else:
+            message = "⚠️ AUTO_TRADE не активен. Параметры сохранены но не применены."
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+        logger.info(f"Applied adaptive parameters: {params}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка применения: {e}")
+        logger.error(f"Apply error: {e}")
+
+async def evaluate_adaptive_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """📊 Evaluate adaptive learning model"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'adaptive') or agent.adaptive is None:
+        await update.message.reply_text("⚠️ AdaptiveLearning не инициализирован")
+        return
+    
+    if not agent.adaptive.is_trained:
+        await update.message.reply_text("⚠️ Модель не обучена. Используйте /train_model сначала")
+        return
+    
+    try:
+        await update.message.reply_text("📊 Оцениваю производительность модели...\nЭто займет ~30 секунд ⏳")
+        
+        results = agent.adaptive.evaluate(n_episodes=5)
+        
+        message = f"""📊 *MODEL EVALUATION*
+
+🎯 Episodes: {results['n_episodes']}
+🏆 Mean Reward: {results['mean_reward']:.2f}
+📊 Std Reward: {results['std_reward']:.2f}
+⏱ Mean Length: {results['mean_length']:.1f} steps
+
+{'✅ Model работает отлично!' if results['mean_reward'] > 0 else '⚠️ Model требует дообучения'}
+"""
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка оценки: {e}")
+        logger.error(f"Evaluation error: {e}")
+
+# ========================================
+# MARKET REGIME COMMANDS (Phase 5)
+# ========================================
+
+async def regime_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """📊 Detect current market regime"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'regime_manager') or agent.regime_manager is None:
+        await update.message.reply_text("⚠️ MarketRegimeManager не инициализирован")
+        return
+    
+    try:
+        await update.message.reply_text("📊 Анализирую текущий режим рынка...\nЭто займет ~10 секунд ⏳")
+        
+        # Detect regime
+        regime = agent.regime_manager.detect_regime(agent.exchange, "BTC/USDT")
+        
+        # Get strategy for this regime
+        strategy = agent.regime_manager.get_current_strategy()
+        should_trade = agent.regime_manager.should_trade_now()
+        
+        # Get regime icon
+        icons = {
+            'TREND_UP': '📈',
+            'TREND_DOWN': '📉',
+            'RANGE': '↔️',
+            'HIGH_VOLATILITY': '⚡',
+            'CRASH': '🚨',
+            'UNKNOWN': '❓'
+        }
+        icon = icons.get(regime.value, '❓')
+        
+        message = f"""{icon} *MARKET REGIME: {regime.value}*
+
+{strategy['description']}
+
+📊 *Trading Parameters:*
+  Confidence Threshold: {strategy['confidence_threshold']}
+  Position Size: {strategy['position_size_multiplier']}x
+  Stop Loss: {strategy['stop_loss_multiplier']}x
+  Take Profit: {strategy['take_profit_multiplier']}x
+  Max Positions: {strategy['max_positions']}
+
+{'✅ Торговля РЕКОМЕНДУЕТСЯ' if should_trade else '🚨 Торговля НЕ РЕКОМЕНДУЕТСЯ'}
+{'⚡ Aggressive mode' if strategy['aggressive_mode'] else '🛡️ Conservative mode'}
+"""
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка определения режима: {e}")
+        logger.error(f"Regime detection error: {e}")
+
+async def regime_fit_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """🎓 Fit HMM model on market data"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'regime_manager') or agent.regime_manager is None:
+        await update.message.reply_text("⚠️ MarketRegimeManager не инициализирован")
+        return
+    
+    try:
+        await update.message.reply_text("🎓 Обучаю HMM модель на исторических данных...\nЭто займет ~20 секунд ⏳")
+        
+        # Fit model
+        success = agent.regime_manager.fit_model(agent.exchange, "BTC/USDT")
+        
+        if success:
+            # Get status
+            status = agent.regime_manager.detector.get_status()
+            
+            message = f"""✅ *HMM MODEL FITTED!*
+
+📊 Model Details:
+  Regimes: {status['n_regimes']}
+  Status: {'Ready' if status['is_fitted'] else 'Not fitted'}
+
+🗺️ Regime Mapping:
+"""
+            
+            for state, regime in status['regime_mapping'].items():
+                message += f"  State {state} → {regime}\n"
+            
+            message += "\nИспользуйте /regime для определения текущего режима"
+            
+            await update.message.reply_text(message, parse_mode='Markdown')
+        else:
+            await update.message.reply_text("❌ Ошибка обучения модели. Проверьте логи.")
+    
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+        logger.error(f"Regime fit error: {e}")
+
+async def regime_history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """📈 Show regime detection history"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'regime_manager') or agent.regime_manager is None:
+        await update.message.reply_text("⚠️ MarketRegimeManager не инициализирован")
+        return
+    
+    try:
+        # Get statistics
+        stats = agent.regime_manager.detector.get_regime_statistics()
+        
+        if 'message' in stats:
+            await update.message.reply_text(stats['message'])
+            return
+        
+        # Format message
+        message = f"""📈 *REGIME DETECTION HISTORY*
+
+🎯 Current: {stats['current_regime']} ({stats['current_probability']:.2f})
+📊 Total Detections: {stats['total_detections']}
+
+📊 *Regime Distribution:*
+"""
+        
+        # Sort by percentage
+        for regime, pct in sorted(stats['regime_percentages'].items(), key=lambda x: x[1], reverse=True):
+            count = stats['regime_counts'][regime]
+            message += f"  {regime}: {pct:.1f}% ({count})\n"
+        
+        # Recent regimes
+        message += f"\n🕐 *Recent Regimes (last 10):*\n  "
+        message += " → ".join(stats['recent_regimes'][-10:])
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+        logger.error(f"Regime history error: {e}")
+
+async def regime_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """📊 Show regime statistics from database"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'regime_manager') or agent.regime_manager is None:
+        await update.message.reply_text("⚠️ MarketRegimeManager не инициализирован")
+        return
+    
+    try:
+        # Get regime history from database
+        df = agent.regime_manager.get_regime_from_db(days=7)
+        
+        if len(df) == 0:
+            await update.message.reply_text("📊 Нет данных в базе. Используйте /regime для начала отслеживания.")
+            return
+        
+        # Calculate statistics
+        regime_counts = df['regime'].value_counts()
+        total = len(df)
+        
+        message = f"""📊 *REGIME STATISTICS (7 days)*
+
+📈 Total Records: {total}
+🕐 First: {df['timestamp'].min()}
+🕐 Last: {df['timestamp'].max()}
+
+📊 *Distribution:*
+"""
+        
+        for regime, count in regime_counts.items():
+            pct = (count / total) * 100
+            message += f"  {regime}: {pct:.1f}% ({count})\n"
+        
+        # Most common regime
+        most_common = regime_counts.index[0]
+        message += f"\n🏆 Most Common: {most_common}"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+        logger.error(f"Regime stats error: {e}")
+
+# ========================================
+# 💭 SENTIMENT ANALYSIS COMMANDS
+# ========================================
+
+async def sentiment_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показать текущий sentiment рынка"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'sentiment_analyzer') or agent.sentiment_analyzer is None:
+        await update.message.reply_text("⚠️ SentimentAnalyzer не инициализирован")
+        return
+    
+    try:
+        await update.message.reply_text("📊 Анализирую настроения рынка...")
+        
+        # Get overall sentiment
+        sentiment = agent.sentiment_analyzer.get_overall_sentiment()
+        
+        if 'error' in sentiment:
+            await update.message.reply_text(f"❌ Ошибка: {sentiment['error']}")
+            return
+        
+        # Get recommendation
+        recommendation = agent.sentiment_analyzer.get_trading_recommendation()
+        
+        # Format message
+        message = f"""💭 *MARKET SENTIMENT*
+
+📊 Overall Score: {sentiment['overall_score']:.1f}/100
+📈 Level: {sentiment['level']}
+
+{recommendation['description']}
+
+🔧 Trading Adjustments:
+  • Confidence: {recommendation['confidence_adjustment']:+.1f}
+  • Position Size: {recommendation['position_size_multiplier']:.1f}x
+  • Aggressive: {recommendation['aggressive']}
+
+💡 {recommendation['reasoning']}
+
+📌 Sources Used:
+"""
+        
+        for source, value in sentiment['sources'].items():
+            weight = sentiment['weights'].get(source, 0) * 100
+            message += f"  • {source}: {value:.1f} (вес: {weight:.0f}%)\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+        logger.error(f"Sentiment command error: {e}")
+
+
+async def fear_greed_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показать Fear & Greed Index"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'sentiment_analyzer') or agent.sentiment_analyzer is None:
+        await update.message.reply_text("⚠️ SentimentAnalyzer не инициализирован")
+        return
+    
+    try:
+        # Get Fear & Greed Index
+        fear_greed = agent.sentiment_analyzer.get_fear_greed_index(use_cache=False)
+        
+        if 'error' in fear_greed:
+            await update.message.reply_text(f"❌ Ошибка: {fear_greed['error']}")
+            return
+        
+        # Get history for trend
+        trend_data = agent.sentiment_analyzer.get_sentiment_trend(days=7)
+        
+        # Format message
+        value = fear_greed['value']
+        classification = fear_greed['value_classification']
+        
+        # Add emoji based on value
+        if value < 25:
+            emoji = "😱"
+        elif value < 45:
+            emoji = "😟"
+        elif value < 55:
+            emoji = "😐"
+        elif value < 75:
+            emoji = "😊"
+        else:
+            emoji = "🤑"
+        
+        message = f"""📊 *CRYPTO FEAR & GREED INDEX*
+
+{emoji} Current: {value}/100
+📈 Classification: {classification}
+
+⏰ Updated: {fear_greed['timestamp'].strftime('%Y-%m-%d %H:%M')}
+
+"""
+        
+        # Add trend if available
+        if 'error' not in trend_data:
+            trend = trend_data['trend']
+            change = trend_data['change']
+            
+            if trend == 'IMPROVING':
+                trend_emoji = "📈"
+                trend_text = "Улучшается"
+            elif trend == 'WORSENING':
+                trend_emoji = "📉"
+                trend_text = "Ухудшается"
+            else:
+                trend_emoji = "↔️"
+                trend_text = "Стабильный"
+            
+            message += f"""{trend_emoji} 7-Day Trend: {trend_text}
+📊 Change: {change:+.0f} points
+📊 Average: {trend_data['average']:.1f}
+"""
+        
+        # Add interpretation
+        message += "\n💡 Интерпретация:\n"
+        
+        if value < 25:
+            message += "  • Extreme Fear - возможность покупки\n"
+            message += "  • Рынок часто перепродан\n"
+        elif value < 45:
+            message += "  • Fear - осторожная покупка\n"
+            message += "  • Возможно недооценен\n"
+        elif value < 55:
+            message += "  • Neutral - нормальная торговля\n"
+        elif value < 75:
+            message += "  • Greed - будьте осторожны\n"
+            message += "  • Возможна коррекция\n"
+        else:
+            message += "  • Extreme Greed - высокий риск\n"
+            message += "  • Рынок может быть перекуплен\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+        logger.error(f"Fear & Greed command error: {e}")
+
+
+async def sentiment_trend_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показать тренд sentiment за 7 дней"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'sentiment_analyzer') or agent.sentiment_analyzer is None:
+        await update.message.reply_text("⚠️ SentimentAnalyzer не инициализирован")
+        return
+    
+    try:
+        # Get sentiment trend
+        trend = agent.sentiment_analyzer.get_sentiment_trend(days=7)
+        
+        if 'error' in trend:
+            await update.message.reply_text(f"❌ Ошибка: {trend['error']}")
+            return
+        
+        # Format message
+        message = f"""📈 *SENTIMENT TREND (7 days)*
+
+📊 Trend: {trend['trend']}
+
+📌 Current: {trend['current']}
+📌 7 Days Ago: {trend['oldest']}
+📊 Change: {trend['change']:+.1f}
+
+📊 Average: {trend['average']:.1f}
+📊 Volatility: {trend['volatility']:.1f}
+
+📜 History:
+```
+"""
+        
+        # Add history
+        for item in trend['history'][:7]:
+            date = item['timestamp'].strftime('%m-%d')
+            value = item['value']
+            classification = item['classification']
+            message += f"{date}: {value:3d} ({classification})\n"
+        
+        message += "```"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+        logger.error(f"Sentiment trend command error: {e}")
+
+# ========================================
+# 🤖 INTELLIGENT AI COMMANDS
+# ========================================
+
+async def ai_predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показать AI предсказание цены"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'intelligent_ai') or agent.intelligent_ai is None:
+        await update.message.reply_text("⚠️ IntelligentAI не инициализирован")
+        return
+    
+    try:
+        await update.message.reply_text("🤖 Анализирую рынок с помощью AI...")
+        
+        # Get market data
+        symbol = 'BTC/USDT'
+        ohlcv = agent.exchange.fetch_ohlcv(symbol, timeframe='1h', limit=200)
+        import pandas as pd
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        
+        # Get ensemble prediction
+        prediction = agent.intelligent_ai.get_ensemble_prediction(df)
+        
+        current_price = prediction['current_price']
+        signal = prediction['final_signal']
+        confidence = prediction['final_confidence']
+        
+        # Format message
+        if signal in ['STRONG_BUY', 'BUY']:
+            emoji = "🟢"
+        elif signal in ['STRONG_SELL', 'SELL']:
+            emoji = "🔴"
+        else:
+            emoji = "⚪"
+        
+        message = f"""🤖 *AI PREDICTION*
+
+{emoji} Signal: {signal}
+📊 Confidence: {confidence:.1%}
+
+💰 Current Price: ${current_price:.2f}
+
+"""
+        
+        # LSTM prediction
+        if 'lstm' in prediction['predictions']:
+            lstm = prediction['predictions']['lstm']
+            message += f"""📈 *LSTM Model:*
+  Predicted: ${lstm['predicted_price']:.2f}
+  Change: {lstm['change_pct']:+.2f}%
+  Signal: {lstm['signal']}
+  Weight: {lstm['weight']:.0%}
+
+"""
+        
+        # Pattern recognition
+        if 'patterns' in prediction['predictions']:
+            patterns = prediction['predictions']['patterns']
+            message += f"""🎨 *Pattern Recognition:*
+  Signal: {patterns['signal']}
+  Patterns found: {patterns['patterns_detected']}
+  BUY signals: {patterns['buy_count']}
+  SELL signals: {patterns['sell_count']}
+  Weight: {patterns['weight']:.0%}
+
+"""
+        
+        # Technical indicators
+        if 'technical' in prediction['predictions']:
+            tech = prediction['predictions']['technical']
+            message += f"""📊 *Technical Analysis:*
+  Signal: {tech['signal']}
+  Confidence: {tech['confidence']:.0%}
+  Weight: {tech['weight']:.0%}
+
+"""
+        
+        # Recommendation
+        message += "💡 *Recommendation:*\n"
+        
+        if signal in ['STRONG_BUY', 'BUY']:
+            message += "  🟢 Покупка рекомендуется\n"
+            if confidence > 0.7:
+                message += "  ✅ Высокая уверенность\n"
+        elif signal in ['STRONG_SELL', 'SELL']:
+            message += "  🔴 Продажа рекомендуется\n"
+            if confidence > 0.7:
+                message += "  ✅ Высокая уверенность\n"
+        else:
+            message += "  ⚪ Ожидайте лучшего момента\n"
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+        logger.error(f"AI predict command error: {e}")
+
+
+async def ai_train_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обучить LSTM модель"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'intelligent_ai') or agent.intelligent_ai is None:
+        await update.message.reply_text("⚠️ IntelligentAI не инициализирован")
+        return
+    
+    try:
+        await update.message.reply_text("🤖 Начинаю обучение LSTM модели...\n⏰ Это займет ~1-2 минуты")
+        
+        # Get training data (1000 candles)
+        symbol = 'BTC/USDT'
+        ohlcv = agent.exchange.fetch_ohlcv(symbol, timeframe='1h', limit=1000)
+        import pandas as pd
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        
+        # Train LSTM
+        result = agent.intelligent_ai.train_lstm(df, epochs=20, batch_size=32)
+        
+        if 'error' in result:
+            await update.message.reply_text(f"❌ Ошибка обучения: {result['error']}")
+            return
+        
+        # Format message
+        message = f"""🤖 *LSTM TRAINING COMPLETE*
+
+✅ Model trained successfully!
+
+📊 Training Stats:
+  • Training samples: {result['train_samples']}
+  • Test samples: {result['test_samples']}
+  • Epochs: {result['epochs']}
+  • Final train loss: {result['final_train_loss']:.6f}
+  • Final test loss: {result['final_test_loss']:.6f}
+
+💾 Model saved to: {result['model_path']}
+
+ℹ️ Теперь используйте /ai_predict для предсказаний
+"""
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+        logger.error(f"AI train command error: {e}")
+
+
+async def ai_patterns_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показать обнаруженные паттерны"""
+    agent = context.bot_data['agent']
+    
+    if not hasattr(agent, 'intelligent_ai') or agent.intelligent_ai is None:
+        await update.message.reply_text("⚠️ IntelligentAI не инициализирован")
+        return
+    
+    try:
+        # Get market data
+        symbol = 'BTC/USDT'
+        ohlcv = agent.exchange.fetch_ohlcv(symbol, timeframe='1h', limit=200)
+        import pandas as pd
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        
+        # Detect patterns
+        patterns = agent.intelligent_ai.pattern_recognizer.detect_patterns(df)
+        
+        if 'error' in patterns:
+            await update.message.reply_text(f"⚠️ {patterns['error']}")
+            return
+        
+        if len(patterns) == 0:
+            await update.message.reply_text("📊 Паттерны не обнаружены в текущих данных")
+            return
+        
+        # Format message
+        message = f"""🎨 *DETECTED PATTERNS*
+
+📊 Found {len(patterns)} pattern(s):
+
+"""
+        
+        for pattern_name, pattern_data in patterns.items():
+            if isinstance(pattern_data, dict):
+                signal = pattern_data.get('signal', 'N/A')
+                confidence = pattern_data.get('confidence', 0)
+                description = pattern_data.get('description', '')
+                
+                if signal == 'BUY':
+                    emoji = "🟢"
+                elif signal == 'SELL':
+                    emoji = "🔴"
+                else:
+                    emoji = "⚪"
+                
+                message += f"""{emoji} *{pattern_name.replace('_', ' ').title()}*
+  Signal: {signal}
+  Confidence: {confidence:.0%}
+  {description}
+
+"""
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+
+# ============================================
+# RISK MANAGEMENT COMMANDS
+# ============================================
+
+async def risk_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show comprehensive risk analysis"""
+    try:
+        if agent.risk_manager is None:
+            await update.message.reply_text("❌ Risk Manager недоступен")
+            return
+        
+        # Get current market data
+        df = await agent.exchange.fetch_ohlcv(agent.symbol, '1h', limit=500)
+        df = pd.DataFrame(df, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        
+        current_price = df['close'].iloc[-1]
+        
+        # Get Kelly position size
+        kelly_size = agent.risk_manager.get_kelly_position_size(agent.symbol, current_price)
+        kelly_pct = kelly_size / agent.risk_manager.current_balance
+        
+        # Calculate VaR
+        var_hist = agent.risk_manager.calculate_portfolio_var(df, confidence=0.95, method='historical')
+        
+        # Calculate ATR-based stop-loss
+        sl_long = agent.risk_manager.calculate_atr_stop_loss(df, current_price, 'long')
+        tp_long = agent.risk_manager.calculate_atr_take_profit(df, current_price, 'long', risk_reward_ratio=2.0)
+        
+        # Get portfolio metrics
+        metrics = agent.risk_manager.get_portfolio_metrics(df)
+        
+        # Get status
+        status = agent.risk_manager.get_status()
+        
+        message = f"""💼 *ADVANCED RISK ANALYSIS*
+
+📊 *Kelly Criterion Position Sizing*
+• Optimal Size: ${kelly_size:.2f} ({kelly_pct:.1%})
+• Max Risk per Trade: {status['max_risk_per_trade']:.1%}
+• Kelly Fraction: {status['kelly_fraction']:.0%}
+
+📉 *Value at Risk (95% confidence)*
+• 1-day VaR: {var_hist['var_1day_pct']:.2%} (${var_hist['var_1day_usd']:.2f})
+• 1-week VaR: {var_hist['var_1week_pct']:.2%} (${var_hist['var_1week_usd']:.2f})
+• 1-month VaR: {var_hist['var_1month_pct']:.2%} (${var_hist['var_1month_usd']:.2f})
+• Risk Level: {var_hist['interpretation']}
+
+🎯 *ATR-based Stop-Loss/Take-Profit*
+• Current Price: ${current_price:.2f}
+• Stop-Loss: ${sl_long:.2f} ({(sl_long-current_price)/current_price:.2%})
+• Take-Profit: ${tp_long:.2f} ({(tp_long-current_price)/current_price:.2%})
+• Risk/Reward Ratio: 1:2
+
+📈 *Portfolio Metrics*
+• Sharpe Ratio: {metrics['sharpe_ratio']:.2f}
+• Sortino Ratio: {metrics['sortino_ratio']:.2f}
+• Max Drawdown: {metrics['max_drawdown']:.2%}
+• Annual Volatility: {metrics['volatility_annual']:.2%}
+• Risk Level: {metrics['risk_level']}
+
+💰 *Account Status*
+• Balance: ${status['current_balance']:.2f}
+• Total Trades: {status['total_trades']}
+• Win Rate: {status['win_rate']:.1%}
+• Total PnL: ${status['total_pnl']:.2f}
+"""
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+
+async def var_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show detailed Value at Risk analysis"""
+    try:
+        if agent.risk_manager is None:
+            await update.message.reply_text("❌ Risk Manager недоступен")
+            return
+        
+        # Get market data
+        df = await agent.exchange.fetch_ohlcv(agent.symbol, '1h', limit=500)
+        df = pd.DataFrame(df, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        
+        # Calculate VaR with both methods
+        var_hist_95 = agent.risk_manager.calculate_portfolio_var(df, 0.95, 'historical')
+        var_param_95 = agent.risk_manager.calculate_portfolio_var(df, 0.95, 'parametric')
+        var_hist_99 = agent.risk_manager.calculate_portfolio_var(df, 0.99, 'historical')
+        
+        message = f"""📊 *VALUE AT RISK (VaR) ANALYSIS*
+
+🔍 *Historical VaR (95% confidence)*
+• 1 день: {var_hist_95['var_1day_pct']:.2%} ≈ ${var_hist_95['var_1day_usd']:.2f}
+• 1 неделя: {var_hist_95['var_1week_pct']:.2%} ≈ ${var_hist_95['var_1week_usd']:.2f}
+• 1 месяц: {var_hist_95['var_1month_pct']:.2%} ≈ ${var_hist_95['var_1month_usd']:.2f}
+• Risk: {var_hist_95['interpretation']}
+
+📐 *Parametric VaR (95% confidence)*
+• 1 день: {var_param_95['var_1day_pct']:.2%} ≈ ${var_param_95['var_1day_usd']:.2f}
+• 1 неделя: {var_param_95['var_1week_pct']:.2%} ≈ ${var_param_95['var_1week_usd']:.2f}
+• 1 месяц: {var_param_95['var_1month_pct']:.2%} ≈ ${var_param_95['var_1month_usd']:.2f}
+
+⚠️ *Conservative VaR (99% confidence)*
+• 1 день: {var_hist_99['var_1day_pct']:.2%} ≈ ${var_hist_99['var_1day_usd']:.2f}
+• 1 неделя: {var_hist_99['var_1week_pct']:.2%} ≈ ${var_hist_99['var_1week_usd']:.2f}
+• 1 месяц: {var_hist_99['var_1month_pct']:.2%} ≈ ${var_hist_99['var_1month_usd']:.2f}
+
+💡 *Что это значит?*
+VaR показывает максимальный убыток, который может произойти с заданной вероятностью.
+Например, 95% VaR = 0.84% означает, что с вероятностью 95% вы не потеряете больше 0.84% за день.
+"""
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+
+async def kelly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show Kelly Criterion analysis"""
+    try:
+        if agent.risk_manager is None:
+            await update.message.reply_text("❌ Risk Manager недоступен")
+            return
+        
+        # Get current price
+        ticker = await agent.exchange.fetch_ticker(agent.symbol)
+        current_price = ticker['last']
+        
+        # Get Kelly position size
+        kelly_size = agent.risk_manager.get_kelly_position_size(agent.symbol, current_price)
+        kelly_pct = kelly_size / agent.risk_manager.current_balance
+        
+        # Get status for win/loss stats
+        status = agent.risk_manager.get_status()
+        
+        # Calculate stats from trade history
+        if len(agent.risk_manager.trade_history) >= 10:
+            wins = [t['pnl'] for t in agent.risk_manager.trade_history if t['pnl'] > 0]
+            losses = [abs(t['pnl']) for t in agent.risk_manager.trade_history if t['pnl'] < 0]
+            
+            win_rate = len(wins) / len(agent.risk_manager.trade_history)
+            avg_win = sum(wins) / len(wins) if wins else 0
+            avg_loss = sum(losses) / len(losses) if losses else 0
+            
+            stats_available = True
+        else:
+            win_rate = status['win_rate']
+            avg_win = 0
+            avg_loss = 0
+            stats_available = False
+        
+        message = f"""📊 *KELLY CRITERION ANALYSIS*
+
+🎯 *Рекомендуемый размер позиции*
+• Optimal Size: ${kelly_size:.2f}
+• Percentage: {kelly_pct:.1%} от баланса
+• Current Balance: ${status['current_balance']:.2f}
+
+📈 *Статистика трейдинга*
+• Total Trades: {status['total_trades']}
+• Win Rate: {win_rate:.1%}
+• Winning Trades: {status['winning_trades']}
+• Losing Trades: {status['losing_trades']}
+"""
+        
+        if stats_available:
+            message += f"""
+💰 *Средние результаты*
+• Avg Win: ${avg_win:.2f}
+• Avg Loss: ${avg_loss:.2f}
+• Win/Loss Ratio: {avg_win/avg_loss if avg_loss > 0 else 0:.2f}
+"""
+        
+        message += f"""
+⚙️ *Настройки Kelly*
+• Kelly Fraction: {status['kelly_fraction']:.0%} (консервативный)
+• Max Risk: {status['max_risk_per_trade']:.1%}
+
+💡 *Объяснение:*
+Kelly Criterion рассчитывает оптимальный размер позиции на основе вашей истории трейдинга.
+Использует fractional Kelly (25%) для более консервативного подхода.
+"""
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+
+        logger.error(f"AI patterns command error: {e}")
+
+# ========================================
+# MAIN
+# ========================================
+
 # --- Main Function to Run the Bot ---
 def main() -> None:
     import sys
@@ -2214,6 +3750,47 @@ def main() -> None:
         application.add_handler(CommandHandler("emergency_stop", emergency_stop_command))
         application.add_handler(CommandHandler("pause", pause_command))
         application.add_handler(CommandHandler("resume", resume_command))
+        
+        # 📊 Performance Analysis commands (Phase 3)
+        application.add_handler(CommandHandler("performance", performance_command))
+        application.add_handler(CommandHandler("analytics", analytics_command))
+        application.add_handler(CommandHandler("recommendations", recommendations_command))
+        application.add_handler(CommandHandler("filters", filters_command))
+        application.add_handler(CommandHandler("optimize", optimize_command))
+        
+        # 🧠 Adaptive Learning commands (Phase 4)
+        application.add_handler(CommandHandler("adaptive_status", adaptive_status_command))
+        application.add_handler(CommandHandler("train_model", train_model_command))
+        application.add_handler(CommandHandler("adaptive_predict", adaptive_predict_command))
+        application.add_handler(CommandHandler("apply_adaptive", apply_adaptive_command))
+        application.add_handler(CommandHandler("evaluate_adaptive", evaluate_adaptive_command))
+        
+        # 📊 Market Regime commands (Phase 5)
+        application.add_handler(CommandHandler("regime", regime_command))
+        application.add_handler(CommandHandler("regime_fit", regime_fit_command))
+        application.add_handler(CommandHandler("regime_history", regime_history_command))
+        application.add_handler(CommandHandler("regime_stats", regime_stats_command))
+        
+        # 💭 Sentiment Analysis commands (Phase 6)
+        application.add_handler(CommandHandler("sentiment", sentiment_command))
+        application.add_handler(CommandHandler("fear_greed", fear_greed_command))
+        application.add_handler(CommandHandler("sentiment_trend", sentiment_trend_command))
+        
+        # 🤖 Intelligent AI commands (Phase 7)
+        application.add_handler(CommandHandler("ai_predict", ai_predict_command))
+        application.add_handler(CommandHandler("ai_train", ai_train_command))
+        application.add_handler(CommandHandler("ai_patterns", ai_patterns_command))
+        
+        # 💼 Risk Management commands (Phase 8)
+        application.add_handler(CommandHandler("risk", risk_command))
+        application.add_handler(CommandHandler("var", var_command))
+        application.add_handler(CommandHandler("kelly", kelly_command))
+        
+        # 🤖 AUTO_TRADE commands
+        application.add_handler(CommandHandler("auto_status", auto_trade_status_command))
+        application.add_handler(CommandHandler("auto_toggle", auto_trade_toggle_command))
+        application.add_handler(CommandHandler("auto_emergency", auto_trade_emergency_command))
+        application.add_handler(CommandHandler("auto_aggressive", auto_trade_aggressive_command))
         
         application.add_handler(MessageHandler(filters.Regex(r'^/approve_.*'), approve_trade_command))
         application.add_handler(MessageHandler(filters.Regex(r'^/reject_.*'), reject_trade_command))
@@ -2265,37 +3842,15 @@ def main() -> None:
         
         # Run the bot until the user presses Ctrl-C  
         logger.info("Starting Telegram bot polling...")
-        logger.info("🤖 Bot is running 24/7 with auto-scan every 5 minutes")
+        logger.info("🤖 Bot is running with auto-scan every 5 minutes")
         
-        # Custom polling loop to avoid python-telegram-bot v22 auto-stop bug
-        import signal
+        # Запуск бота (python-telegram-bot v22 сам управляет event loop)
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
+        )
         
-        async def start_bot():
-            await application.initialize()
-            await application.start()
-            await application.updater.start_polling(
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True
-            )
-            
-            # Keep bot running indefinitely
-            while True:
-                await asyncio.sleep(10)
-        
-        # Блокируем сигналы остановки
-        signal.signal(signal.SIGINT, signal.SIG_IGN)
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        
-        # Запуск бота
-        try:
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(start_bot())
-        except KeyboardInterrupt:
-            logger.info("Received KeyboardInterrupt, stopping...")
-        finally:
-            loop.run_until_complete(application.updater.stop())
-            loop.run_until_complete(application.stop())
-            loop.run_until_complete(application.shutdown())
+        logger.info("Bot polling stopped")
 
         
     except KeyboardInterrupt:
@@ -2307,6 +3862,16 @@ def main() -> None:
         logger.info("Telegram bot stopped.")
 
 if __name__ == '__main__':
+    # Setup logging with file output for 24/7 operation
+    logging.basicConfig(
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=logging.INFO,
+        handlers=[
+            logging.FileHandler('bot.log', encoding='utf-8'),
+            logging.StreamHandler()
+        ]
+    )
+    
     try:
         main()
     except KeyboardInterrupt:

@@ -169,7 +169,8 @@ def test_sqlite():
         required_tables = ['signals', 'trades', 'performance', 'safety_state']
         for table in required_tables:
             if table in tables:
-                cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                # Safe: table names are from hardcoded whitelist, not user input
+                cursor.execute(f"SELECT COUNT(*) FROM {table}")  # nosec - table is whitelisted
                 count = cursor.fetchone()[0]
                 print_success(f"  {table}: {count} records")
             else:
